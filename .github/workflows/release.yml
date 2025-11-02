@@ -1,0 +1,124 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Verify manifest version matches tag
+        run: |
+          MANIFEST_VERSION=$(grep '"version"' manifest.json | head -1 | sed 's/.*"version": "\([^"]*\)".*/\1/')
+          TAG_VERSION="${{ steps.version.outputs.VERSION }}"
+          if [ "$MANIFEST_VERSION" != "$TAG_VERSION" ]; then
+            echo "Error: manifest.json version ($MANIFEST_VERSION) does not match tag version ($TAG_VERSION)"
+            exit 1
+          fi
+          echo "Version verified: $MANIFEST_VERSION"
+
+      - name: Create distribution package
+        run: |
+          mkdir -p dist
+          zip -r "dist/chaser-oss-v${{ steps.version.outputs.VERSION }}.zip" \
+            manifest.json \
+            background.js \
+            content/ \
+            assets/ \
+            README.md \
+            LICENSE \
+            banner.png \
+            -x "*.DS_Store" \
+            -x "*/.DS_Store"
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum chaser-oss-v${{ steps.version.outputs.VERSION }}.zip > chaser-oss-v${{ steps.version.outputs.VERSION }}.zip.sha256
+          cat chaser-oss-v${{ steps.version.outputs.VERSION }}.zip.sha256
+
+      - name: Extract release notes
+        id: release_notes
+        run: |
+          if [ -f "CHANGELOG.md" ]; then
+            # Extract notes for this version from CHANGELOG.md
+            awk '/^## \[v?${{ steps.version.outputs.VERSION }}\]/{flag=1; next} /^## \[/{flag=0} flag' CHANGELOG.md > release_notes.txt
+          else
+            # Create basic release notes
+            cat > release_notes.txt << 'EOF'
+          ## Chaser OSS v${{ steps.version.outputs.VERSION }}
+
+          Open-source Chrome extension for automating bonus claims and reload management on Stake.com.
+
+          ### Installation
+
+          1. Download the ZIP file below
+          2. Verify the checksum (SHA256):
+             ```bash
+             sha256sum -c chaser-oss-v${{ steps.version.outputs.VERSION }}.zip.sha256
+             ```
+          3. Extract the ZIP file
+          4. Open Chrome and navigate to `chrome://extensions/`
+          5. Enable "Developer mode"
+          6. Click "Load unpacked" and select the extracted directory
+
+          ### Verification
+
+          **SHA256 Checksum:**
+          ```
+          $(cat dist/chaser-oss-v${{ steps.version.outputs.VERSION }}.zip.sha256)
+          ```
+
+          **Verify the download:**
+          ```bash
+          # Linux/macOS
+          sha256sum chaser-oss-v${{ steps.version.outputs.VERSION }}.zip
+
+          # Windows (PowerShell)
+          Get-FileHash chaser-oss-v${{ steps.version.outputs.VERSION }}.zip -Algorithm SHA256
+          ```
+
+          ### Security Notice
+
+          Always verify the checksum before installation. Only install Chaser OSS from official GitHub releases at https://github.com/chasing-codes/chaser-oss/releases
+
+          ### What's Included
+
+          - Complete extension source code
+          - README with full documentation
+          - MIT License
+          EOF
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/chaser-oss-v${{ steps.version.outputs.VERSION }}.zip
+            dist/chaser-oss-v${{ steps.version.outputs.VERSION }}.zip.sha256
+          body_path: release_notes.txt
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.VERSION, 'beta') || contains(steps.version.outputs.VERSION, 'alpha') || contains(steps.version.outputs.VERSION, 'rc') }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: chaser-oss-v${{ steps.version.outputs.VERSION }}
+          path: dist/
+          retention-days: 90
